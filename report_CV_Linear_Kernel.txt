@@ -1,0 +1,16 @@
+MODEL: Linear Kernel (5-Fold CV)
+MEAN ACCURACY: 0.8577 (+/- 0.0191)
+------------------------------
+Fold Scores: [0.8493, 0.8921, 0.849, 0.8358, 0.8621]
+============================================================
+              precision    recall  f1-score   support
+
+       eriki       0.70      0.81      0.75      1600
+   ilianthos       0.89      0.90      0.90       950
+       pefko       0.88      0.88      0.88      2650
+     thymari       0.93      0.88      0.90      4639
+     vamvaki       0.72      0.69      0.71       850
+
+    accuracy                           0.86     10689
+   macro avg       0.82      0.83      0.83     10689
+weighted avg       0.86      0.86      0.86     10689
