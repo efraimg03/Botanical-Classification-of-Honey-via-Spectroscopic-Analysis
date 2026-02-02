@@ -1,0 +1,268 @@
+import pandas as pd 
+import numpy as np
+import os 
+import sys
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
+from sklearn.pipeline import Pipeline
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from sklearn.mixture import GaussianMixture
+from sklearn.cluster import AgglomerativeClustering
+from scipy.cluster.hierarchy import dendrogram, linkage
+import matplotlib.pyplot as plt 
+from sklearn.metrics import adjusted_rand_score 
+
+
+# --- 1. SETUP PATHS ---
+    #current_dir = os.path.dirname(os.path.abspath(__file__))
+    #parent_dir = os.path.dirname(current_dir)
+    #sys.path.append(parent_dir)
+
+#load the dataset 
+data=pd.read_csv(r'C:\Users\egiannikos\Desktop\dataset_classification_pipeline\dataset_classification_pipeline-main\data\processed\spectral_dataset_enriched.csv')
+#display the first few rows of the dataset
+print(data.head())
+print(data.shape)
+
+#keeping only the relevant botanical classes 
+data = data[data['botanical'].isin(['thymari', 'pefko','eriki','vamvaki','anthomelo'])]
+
+#prepare the data for clustering
+X=data.drop(columns=['id', 'sample_code', 'botanical', 'geographic'], errors='ignore').values
+Y=data['botanical'].values
+pipeline=Pipeline([
+    ('scaler',StandardScaler()),
+    ('pca',PCA(n_components=100))
+])
+X_transformed=pipeline.fit_transform(X)
+#determine the optimal number of clusters using the elbow method and silhouette score
+silhouette_scores = []
+inertia = []
+K = range(2, 11)
+for k in K:
+    kmeans = KMeans(n_clusters=k, random_state=42,n_init=10)
+    kmeans.fit(X_transformed)
+
+    inertia.append(kmeans.inertia_) #elbow method 
+
+
+    labels = kmeans.labels_
+    score = silhouette_score(X_transformed, labels)
+    silhouette_scores.append(score)
+    print(f"Number of clusters: {k}, Silhouette Score: {score:.4f},Inertia={kmeans.inertia_:.2f}")
+
+optimal_k = 5
+print(f"\nOptimal number of clusters determined using elbow method and silhouette score: {optimal_k}")
+
+#visualize the elbow method and silhouette scores
+fig_metrics = make_subplots(specs=[[{"secondary_y": True}]])
+
+# Inertia (Elbow)
+fig_metrics.add_trace(
+    go.Scatter(x=list(K), y=inertia, name="Inertia (Elbow)", mode='lines+markers', line=dict(color='blue')),
+    secondary_y=False
+)
+
+# Silhouette
+fig_metrics.add_trace(
+    go.Scatter(x=list(K), y=silhouette_scores, name="Silhouette Score", mode='lines+markers', line=dict(color='red')),
+    secondary_y=True
+)
+
+fig_metrics.update_layout(
+    title_text="Τεκμηρίωση Επιλογής Clusters: Elbow Method vs Silhouette Score",
+    xaxis_title="Αριθμός Clusters (k)"
+)
+
+fig_metrics.update_yaxes(title_text="Inertia", secondary_y=False)
+fig_metrics.update_yaxes(title_text="Silhouette Score", secondary_y=True)
+fig_metrics.show()
+
+#  3D Visualization 
+#  KMeans με το βέλτιστο k 
+final_kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
+cluster_labels = final_kmeans.fit_predict(X_transformed)
+
+# Προσθέτουμε τα αποτελέσματα σε DataFrame 
+plot_df = pd.DataFrame(X_transformed[:, :3], columns=['PC1', 'PC2', 'PC3'])
+plot_df['Cluster'] = cluster_labels
+plot_df['True_Botanical'] = Y
+
+#  3D Scatter Plot 
+fig_3d = go.Figure(data=[go.Scatter3d(
+    x=plot_df['PC1'],
+    y=plot_df['PC2'],
+    z=plot_df['PC3'],
+    mode='markers',
+    marker=dict(
+        size=5,
+        color=plot_df['Cluster'],                # Χρώμα βάσει του Cluster που βρήκε ο αλγόριθμος
+        colorscale='Viridis',
+        opacity=0.8,
+        showscale=True
+    ),
+    text=[f"Cluster: {c}<br>True: {t}" for c, t in zip(plot_df['Cluster'], plot_df['True_Botanical'])] # Hover info
+)])
+
+fig_3d.update_layout(
+    title=f"3D PCA Visualization (k={optimal_k})",
+    scene=dict(
+        xaxis_title='PC1',
+        yaxis_title='PC2',
+        zaxis_title='PC3'
+    ),
+    margin=dict(l=0, r=0, b=0, t=40)
+)
+fig_3d.show()
+
+#Crosstab  
+print("\nΣύγκριση Clusters με Πραγματική Βοτανική Προέλευση:")
+print(pd.crosstab(Y, cluster_labels, rownames=['Actual'], colnames=['Cluster']))
+
+
+
+#-----------------------------------------------------------------------------------------------
+# --- GMM με διαφορετικά Covariance Types ---
+print("\n--- GMM Tuning: Testing Covariance Types ---")
+
+covariance_types = ['full', 'tied', 'diag', 'spherical']
+results_bic = {}
+
+# Δοκιμάζουμε όλους τους τύπους
+for cov_type in covariance_types:
+    bic_scores_temp = []
+    # Δοκιμή για k από 2 έως 10
+    for n in range(2, 11):
+        # ΣΗΜΑΝΤΙΚΟ: Μείωσε τα components αν το BIC συνεχίζει να ανεβαίνει
+        # Χρησιμοποιούμε π.χ. τα πρώτα 20 components για το GMM
+        
+        gmm = GaussianMixture(n_components=n, covariance_type=cov_type, random_state=42)
+        gmm.fit(X_transformed)
+        bic_scores_temp.append(gmm.bic(X_transformed))
+
+    results_bic[cov_type] = bic_scores_temp
+
+# Visualization
+fig_tuning = go.Figure()
+K_range = list(range(2, 11))
+
+for cov_type, scores in results_bic.items():
+    fig_tuning.add_trace(go.Scatter(
+        x=K_range, 
+        y=scores, 
+        mode='lines+markers', 
+        name=f'Covariance: {cov_type}'
+    ))
+
+fig_tuning.update_layout(
+    title="GMM BIC Scores per Covariance Type (Lower is Better)",
+    xaxis_title="Number of Clusters (k)",
+    yaxis_title="BIC Score"
+)
+fig_tuning.show()
+
+
+# Εφαρμογή GMM με τον καλύτερο τύπο covariance (π.χ. 'diag') 
+print("\n--- Εφαρμογή GMM με τον καλύτερο τύπο Covariance ---")
+best_cov_type = 'diag'  # Από τα παραπάνω αποτελέσματα
+bic_scores = []
+n_components_range = range(2, 11)
+for n in n_components_range:
+    gmm = GaussianMixture(n_components=n, covariance_type=best_cov_type, random_state=42)
+    gmm.fit(X_transformed)
+    bic_scores.append(gmm.bic(X_transformed))
+
+#visualisation of best cov type 
+fig_bic = go.Figure()
+fig_bic.add_trace(go.Scatter(
+    x=list(n_components_range),
+    y=bic_scores,
+    mode='lines+markers',
+    name=f'Covariance: {best_cov_type}'
+))
+fig_bic.update_layout(
+    title="GMM BIC Scores for Best Covariance Type",
+    xaxis_title="Number of Clusters (k)",
+    yaxis_title="BIC Score"
+)
+fig_bic.show()
+
+# Επιλογή βέλτιστου k για GMM 
+optimal_k_gmm = 5
+print(f"Optimal clusters for GMM (based on BIC): {optimal_k_gmm}")
+
+# Εφαρμογή του GMM με το βέλτιστο k
+gmm_final = GaussianMixture(n_components=optimal_k_gmm, random_state=42)
+gmm_labels = gmm_final.fit_predict(X_transformed)
+
+# Σύγκριση GMM με πραγματικά δεδομένα
+print("\nCrosstab GMM vs True Botanical:")
+print(pd.crosstab(Y, gmm_labels, rownames=['Actual'], colnames=['GMM_Cluster']))
+
+
+
+#-----------------------------------------------------------------------------------------------
+# Agglomerative Hierarchical Clustering 
+print("\n--- Ξεκινάει η ανάλυση Agglomerative ---")
+
+# Dendrogram
+plt.figure(figsize=(12, 6))
+plt.title("Hierarchical Clustering Dendrogram")
+dendro = dendrogram(linkage(X_transformed, method='ward'))#Υπολογίζει τις αποστάσεις μεταξύ όλων των δειγμάτων. 
+#Η μέθοδος 'ward' προσπαθεί να κρατήσει τις ομάδες συμπαγεί
+plt.xlabel("Δείγματα")
+plt.ylabel("Ευκλείδια Απόσταση")
+plt.show() 
+
+
+# Εφαρμογή Clustering
+silhouette_scores_agg = []
+K_range = range(2, 11)
+for k in K_range:
+    agg_cluster = AgglomerativeClustering(n_clusters=k)
+    agg_labels = agg_cluster.fit_predict(X_transformed)
+    score = silhouette_score(X_transformed, agg_labels)
+    silhouette_scores_agg.append(score)
+    print(f"Number of clusters: {k}, Silhouette Score: {score:.4f}")
+optimal_k_agg= 5
+print(f"\nOptimal number of clusters for Agglomerative Clustering: {optimal_k_agg}")
+
+#visualization of silhouette scores for Agglomerative Clustering
+fig_agg_silhouette = go.Figure()
+fig_agg_silhouette.add_trace(go.Scatter(
+    x=list(K_range),
+    y=silhouette_scores_agg,
+))
+fig_agg_silhouette.update_layout(
+    title="Silhouette Scores for Agglomerative Clustering",
+    xaxis_title="Number of Clusters (k)",
+    yaxis_title="Silhouette Score"
+)
+fig_agg_silhouette.show()
+
+
+# Τελική Εφαρμογή Agglomerative Clustering
+agg_final = AgglomerativeClustering(n_clusters=optimal_k_agg)
+agg_labels = agg_final.fit_predict(X_transformed)
+
+# Σύγκριση Agglomerative με πραγματικά δεδομένα
+print("\nCrosstab Agglomerative vs True Botanical:")
+print(pd.crosstab(Y, agg_labels, rownames=['Actual'], colnames=['Agglo_Cluster']))
+
+# Τελική Σύγκριση 
+print("\n--- Σύγκριση Απόδοσης (Adjusted Rand Index) ---")
+
+
+score_kmeans = adjusted_rand_score(Y, cluster_labels) # cluster_labels από KMeans
+score_gmm = adjusted_rand_score(Y, gmm_labels)
+score_agg = adjusted_rand_score(Y, agg_labels)
+
+print(f"K-Means ARI Score:       {score_kmeans:.4f}")
+print(f"GMM ARI Score:           {score_gmm:.4f}")
+print(f"Agglomerative ARI Score: {score_agg:.4f}")
+
+best_model = max({"K-Means": score_kmeans, "GMM": score_gmm, "Agglomerative": score_agg}, key=lambda k: {"K-Means": score_kmeans, "GMM": score_gmm, "Agglomerative": score_agg}[k])
+print(f"\nΟ αλγόριθμος που πλησίασε περισσότερο την πραγματική βοτανική προέλευση είναι: {best_model}")
